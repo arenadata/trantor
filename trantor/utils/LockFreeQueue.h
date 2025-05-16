@@ -1,114 +1,65 @@
-/**
- *
- *  @file LockFreeQueue.h
- *  @author An Tao
- *
- *  Public header file in trantor lib.
- *
- *  Copyright 2018, An Tao.  All rights reserved.
- *  Use of this source code is governed by a BSD-style license
- *  that can be found in the License file.
- *
- *
- */
-
-#pragma once
 #include <trantor/utils/NonCopyable.h>
 #include <atomic>
-#include <type_traits>
 #include <memory>
-#include <assert.h>
+#include <type_traits>
+#include <mutex>
+#include <queue>
+#include <condition_variable>
+
 namespace trantor
 {
-/**
- * @brief This class template represents a lock-free multiple producers single
- * consumer queue
- *
- * @tparam T The type of the items in the queue.
- */
+// Thread safe queue implementation
 template <typename T>
-class MpscQueue : public NonCopyable
+class ThreadSafeQueue : public NonCopyable
 {
   public:
-    MpscQueue()
-        : head_(new BufferNode), tail_(head_.load(std::memory_order_relaxed))
+    ThreadSafeQueue() = default;
+
+    ~ThreadSafeQueue() = default;
+
+    void enqueue(T&& input)
     {
-    }
-    ~MpscQueue()
-    {
-        T output;
-        while (this->dequeue(output))
-        {
-        }
-        BufferNode *front = head_.load(std::memory_order_relaxed);
-        delete front;
+        std::lock_guard<std::mutex> lock(mutex_);
+        queue_.push(std::forward<T>(input));
     }
 
-    /**
-     * @brief Put a item into the queue.
-     *
-     * @param input
-     * @note This method can be called in multiple threads.
-     */
-    void enqueue(T &&input)
+    void enqueue(const T& input)
     {
-        BufferNode *node{new BufferNode(std::move(input))};
-        BufferNode *prevhead{head_.exchange(node, std::memory_order_acq_rel)};
-        prevhead->next_.store(node, std::memory_order_release);
-    }
-    void enqueue(const T &input)
-    {
-        BufferNode *node{new BufferNode(input)};
-        BufferNode *prevhead{head_.exchange(node, std::memory_order_acq_rel)};
-        prevhead->next_.store(node, std::memory_order_release);
+        std::lock_guard<std::mutex> lock(mutex_);
+        queue_.push(input);
     }
 
-    /**
-     * @brief Get a item from the queue.
-     *
-     * @param output
-     * @return false if the queue is empty.
-     * @note This method must be called in a single thread.
-     */
-    bool dequeue(T &output)
+    bool dequeue(T& output)
     {
-        BufferNode *tail = tail_.load(std::memory_order_relaxed);
-        BufferNode *next = tail->next_.load(std::memory_order_acquire);
-
-        if (next == nullptr)
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (queue_.empty())
         {
             return false;
         }
-        output = std::move(*(next->dataPtr_));
-        delete next->dataPtr_;
-        tail_.store(next, std::memory_order_release);
-        delete tail;
+
+        output = std::move(queue_.front());
+        queue_.pop();
         return true;
     }
 
-    bool empty()
+    bool empty() const
     {
-        BufferNode *tail = tail_.load(std::memory_order_relaxed);
-        BufferNode *next = tail->next_.load(std::memory_order_acquire);
-        return next == nullptr;
+        std::lock_guard<std::mutex> lock(mutex_);
+        return queue_.empty();
+    }
+
+    size_t size() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return queue_.size();
     }
 
   private:
-    struct BufferNode
-    {
-        BufferNode() = default;
-        BufferNode(const T &data) : dataPtr_(new T(data))
-        {
-        }
-        BufferNode(T &&data) : dataPtr_(new T(std::move(data)))
-        {
-        }
-        T *dataPtr_;
-        std::atomic<BufferNode *> next_{nullptr};
-    };
-
-    std::atomic<BufferNode *> head_;
-    std::atomic<BufferNode *> tail_;
+    mutable std::mutex mutex_;
+    std::queue<T> queue_;
 };
+
+template <typename T>
+using MpscQueue = ThreadSafeQueue<T>;
 
 }  // namespace trantor
